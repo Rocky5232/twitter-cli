@@ -190,6 +190,35 @@ def test_verify_cookies_logs_attempt_summary_on_non_auth_failures(monkeypatch, c
     assert "settings.json=Exception" in caplog.text
 
 
+def test_verify_cookies_returns_viewer_from_credentials(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id_str": "42",
+                "name": "Test User",
+                "screen_name": "testuser",
+                "profile_image_url_https": "https://example.com/avatar.jpg",
+            }
+
+    class Session:
+        def get(self, url, headers=None, timeout=5):
+            return Response()
+
+    monkeypatch.setattr("twitter_cli.client._get_cffi_session", lambda: Session())
+
+    result = auth.verify_cookies("token", "csrf")
+
+    assert result["viewer"] == {
+        "id": "42",
+        "name": "Test User",
+        "screenName": "testuser",
+        "username": "testuser",
+        "profileImageUrl": "https://example.com/avatar.jpg",
+    }
+
+
 def test_iter_chrome_cookie_files_default_first(monkeypatch, tmp_path) -> None:
     """Default profile should be yielded first, then Profile N sorted."""
     # Create the correct platform-specific directory structure

@@ -155,6 +155,7 @@ def _get_client(config=None, quiet=False):
         cookies["ct0"],
         rate_limit_config,
         cookie_string=cookies.get("cookie_string"),
+        viewer=cookies.get("viewer"),
     )
 
 
@@ -349,34 +350,56 @@ def _fetch_and_display(fetch_fn, label, emoji, max_count, as_json, as_yaml, outp
     console.print()
 
 
-def _emit_timeline_structured(tweets, next_cursor, *, as_json, as_yaml):
-    # type: (TweetList, Optional[str], bool, bool) -> bool
+def _emit_timeline_structured(tweets, next_cursor, *, as_json, as_yaml, viewer=None):
+    # type: (TweetList, Optional[str], bool, bool, Optional[Dict[str, str]]) -> bool
     """Emit timeline data with pagination metadata while keeping `data` a tweet list."""
     payload = success_payload(tweets_to_data(tweets))
+    if viewer:
+        payload["viewer"] = viewer
     if next_cursor:
         payload["pagination"] = {"nextCursor": next_cursor}
     return emit_structured(payload, as_json=as_json, as_yaml=as_yaml)
 
 
-def _run_bookmarks_command(max_count, as_json, as_yaml, output_file, do_filter, compact=False, full_text=False):
-    # type: (Optional[int], bool, bool, Optional[str], bool, bool, bool) -> None
+def _run_bookmarks_command(max_count, cursor, as_json, as_yaml, output_file, do_filter, compact=False, full_text=False):
+    # type: (Optional[int], Optional[str], bool, bool, Optional[str], bool, bool, bool) -> None
     config = load_config()
 
     def _run():
         client = _get_client(config)
-        _fetch_and_display(
-            lambda count: client.fetch_bookmarks(count),
-            "bookmarks",
-            "🔖",
-            max_count,
-            as_json,
-            as_yaml,
-            output_file,
-            do_filter,
-            config,
-            compact=compact,
-            full_text=full_text,
+        fetch_count = _resolve_configured_count(config, max_count)
+        rich_output = use_rich_output(as_json=as_json, as_yaml=as_yaml, compact=compact)
+        if rich_output:
+            console.print("🔖 Fetching bookmarks (%d tweets)...\n" % fetch_count)
+        start = time.time()
+        tweets, next_cursor = client.fetch_bookmarks(
+            fetch_count,
+            cursor=cursor,
+            return_cursor=True,
         )
+        elapsed = time.time() - start
+        if rich_output:
+            console.print("✅ Fetched %d bookmarks in %.1fs\n" % (len(tweets), elapsed))
+
+        filtered = _apply_filter(tweets, do_filter, config, rich_output=rich_output)
+
+        if output_file:
+            Path(output_file).write_text(tweets_to_json(filtered), encoding="utf-8")
+            if rich_output:
+                console.print("💾 Saved to %s\n" % output_file)
+
+        if compact:
+            click.echo(tweets_to_compact_json(filtered))
+            return
+
+        save_tweet_cache(filtered)
+
+        if _emit_timeline_structured(filtered, next_cursor, as_json=as_json, as_yaml=as_yaml, viewer=getattr(client, "viewer", None)):
+            return
+
+        print_tweet_table(filtered, console, title="🔖 bookmarks — %d tweets" % len(filtered), full_text=full_text)
+        _print_show_hint()
+        console.print()
 
     _run_guarded(_run)
 
@@ -488,16 +511,18 @@ def feed(ctx, feed_type, max_count, cursor, as_json, as_yaml, input_file, output
 
 @cli.command()
 @click.option("--max", "-n", "max_count", type=int, default=None, help="Max number of tweets to fetch.")
+@click.option("--cursor", type=str, default=None, help="Pagination cursor for continuing a previous bookmarks request.")
 @structured_output_options
 @click.option("--output", "-o", "output_file", type=str, default=None, help="Save tweets to JSON file.")
 @click.option("--filter", "do_filter", is_flag=True, help="Enable score-based filtering.")
 @click.option("--full-text", is_flag=True, help="Show full tweet text in table output.")
 @click.pass_context
-def favorites(ctx, max_count, as_json, as_yaml, output_file, do_filter, full_text):
-    # type: (Any, Optional[int], bool, bool, Optional[str], bool, bool) -> None
+def favorites(ctx, max_count, cursor, as_json, as_yaml, output_file, do_filter, full_text):
+    # type: (Any, Optional[int], Optional[str], bool, bool, Optional[str], bool, bool) -> None
     """Fetch bookmarked (favorite) tweets."""
     _run_bookmarks_command(
         max_count,
+        cursor,
         as_json,
         as_yaml,
         output_file,
@@ -509,17 +534,19 @@ def favorites(ctx, max_count, as_json, as_yaml, output_file, do_filter, full_tex
 
 @cli.group(name="bookmarks", invoke_without_command=True)
 @click.option("--max", "-n", "max_count", type=int, default=None, help="Max number of tweets to fetch.")
+@click.option("--cursor", type=str, default=None, help="Pagination cursor for continuing a previous bookmarks request.")
 @structured_output_options
 @click.option("--output", "-o", "output_file", type=str, default=None, help="Save tweets to JSON file.")
 @click.option("--filter", "do_filter", is_flag=True, help="Enable score-based filtering.")
 @click.option("--full-text", is_flag=True, help="Show full tweet text in table output.")
 @click.pass_context
-def bookmarks(ctx, max_count, as_json, as_yaml, output_file, do_filter, full_text):
-    # type: (Any, Optional[int], bool, bool, Optional[str], bool, bool) -> None
+def bookmarks(ctx, max_count, cursor, as_json, as_yaml, output_file, do_filter, full_text):
+    # type: (Any, Optional[int], Optional[str], bool, bool, Optional[str], bool, bool) -> None
     """Fetch bookmarked tweets, or manage bookmark folders."""
     if ctx.invoked_subcommand is None:
         _run_bookmarks_command(
             max_count,
+            cursor,
             as_json,
             as_yaml,
             output_file,

@@ -150,6 +150,74 @@ def test_cli_list_accepts_cursor_and_emits_pagination(monkeypatch, tweet_factory
     assert payload["pagination"]["nextCursor"] == "cursor-next"
 
 
+def test_cli_bookmarks_accepts_cursor_and_emits_pagination(monkeypatch, tweet_factory) -> None:
+    class FakeClient:
+        viewer = {
+            "id": "42",
+            "name": "Test User",
+            "screenName": "testuser",
+            "username": "testuser",
+            "profileImageUrl": "https://example.com/avatar.jpg",
+        }
+
+        def fetch_bookmarks(
+            self,
+            count: int,
+            cursor: str | None = None,
+            return_cursor: bool = False,
+        ):
+            assert count == 20
+            assert cursor == "cursor-prev"
+            assert return_cursor is True
+            return [tweet_factory("1")], "cursor-next"
+
+    monkeypatch.setattr("twitter_cli.cli._get_client", lambda config=None, quiet=False: FakeClient())
+    monkeypatch.setattr(
+        "twitter_cli.cli.load_config",
+        lambda: {"fetch": {"count": 20}, "filter": {}, "rateLimit": {}},
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["bookmarks", "--cursor", "cursor-prev", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["data"][0]["id"] == "1"
+    assert payload["viewer"]["id"] == "42"
+    assert payload["viewer"]["screenName"] == "testuser"
+    assert payload["pagination"]["nextCursor"] == "cursor-next"
+
+
+def test_cli_favorites_accepts_cursor_and_emits_pagination(monkeypatch, tweet_factory) -> None:
+    class FakeClient:
+        def fetch_bookmarks(
+            self,
+            count: int,
+            cursor: str | None = None,
+            return_cursor: bool = False,
+        ):
+            assert count == 20
+            assert cursor == "cursor-prev"
+            assert return_cursor is True
+            return [tweet_factory("1")], "cursor-next"
+
+    monkeypatch.setattr("twitter_cli.cli._get_client", lambda config=None, quiet=False: FakeClient())
+    monkeypatch.setattr(
+        "twitter_cli.cli.load_config",
+        lambda: {"fetch": {"count": 20}, "filter": {}, "rateLimit": {}},
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["favorites", "--cursor", "cursor-prev", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["data"][0]["id"] == "1"
+    assert payload["pagination"]["nextCursor"] == "cursor-next"
+
+
 def test_print_tweet_table_truncates_text_by_default(tweet_factory) -> None:
     long_text = "A" * 140
     console = Console(record=True, width=400)

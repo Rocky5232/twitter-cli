@@ -136,11 +136,12 @@ def _url_fetch(url, headers=None):
 class TwitterClient:
     """Twitter GraphQL API client using cookie authentication."""
 
-    def __init__(self, auth_token, ct0, rate_limit_config=None, cookie_string=None):
-        # type: (str, str, Optional[Dict[str, Any]], Optional[str]) -> None
+    def __init__(self, auth_token, ct0, rate_limit_config=None, cookie_string=None, viewer=None):
+        # type: (str, str, Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, str]]) -> None
         self._auth_token = auth_token
         self._ct0 = ct0
         self._cookie_string = cookie_string  # Full browser cookie string
+        self.viewer = viewer or {}
         rl = rate_limit_config or {}
         self._request_delay = float(rl.get("requestDelay", 2.5))
         self._max_retries = int(rl.get("maxRetries", 3))
@@ -177,8 +178,8 @@ class TwitterClient:
             return_cursor=return_cursor,
         )
 
-    def fetch_bookmarks(self, count=50):
-        # type: (int) -> List[Tweet]
+    def fetch_bookmarks(self, count=50, cursor=None, return_cursor=False):
+        # type: (int, Optional[str], bool) -> Any
         """Fetch bookmarked tweets."""
         def get_instructions(data):
             # type: (Any) -> Any
@@ -187,7 +188,13 @@ class TwitterClient:
                 instructions = _deep_get(data, "data", "bookmark_timeline_v2", "timeline", "instructions")
             return instructions
 
-        return self._fetch_timeline("Bookmarks", count, get_instructions)
+        return self._fetch_timeline(
+            "Bookmarks",
+            count,
+            get_instructions,
+            start_cursor=cursor,
+            return_cursor=return_cursor,
+        )
 
     def fetch_bookmark_folders(self):
         # type: () -> List[BookmarkFolder]

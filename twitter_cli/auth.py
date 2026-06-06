@@ -144,7 +144,8 @@ def verify_cookies(auth_token: str, ct0: str, cookie_string: Optional[str] = Non
                 data = resp.json()
                 attempts.append("%s=200" % endpoint)
                 logger.debug("Cookie verification succeeded via %s", endpoint)
-                return {"screen_name": data.get("screen_name", "")}
+                viewer = _viewer_from_verification_payload(data)
+                return {"viewer": viewer} if viewer else {}
             attempts.append("%s=%d" % (endpoint, resp.status_code))
             logger.debug("Verification endpoint %s returned HTTP %d, trying next...", url, resp.status_code)
             continue
@@ -161,6 +162,28 @@ def verify_cookies(auth_token: str, ct0: str, cookie_string: Optional[str] = Non
         ", ".join(attempts) if attempts else "none",
     )
     return {}
+
+
+def _viewer_from_verification_payload(data: Dict[str, Any]) -> Dict[str, str]:
+    """Normalize current account identity from auth verification payloads."""
+    user_id = data.get("id_str") or data.get("id") or data.get("user_id") or ""
+    screen_name = data.get("screen_name") or data.get("screenName") or ""
+    name = data.get("name") or ""
+    profile_image_url = (
+        data.get("profile_image_url_https")
+        or data.get("profile_image_url")
+        or data.get("profileImageUrl")
+        or ""
+    )
+
+    viewer = {
+        "id": str(user_id),
+        "name": str(name),
+        "screenName": str(screen_name),
+        "username": str(screen_name),
+        "profileImageUrl": str(profile_image_url),
+    }
+    return {key: value for key, value in viewer.items() if value}
 
 
 def _extract_cookies_from_jar(jar: Any, source: str = "unknown") -> Optional[Dict[str, str]]:
@@ -621,14 +644,18 @@ def get_cookies() -> Dict[str, str]:
 
     # Verify only for explicit auth failures; transient endpoint issues are tolerated.
     try:
-        verify_cookies(cookies["auth_token"], cookies["ct0"], cookies.get("cookie_string"))
+        verification = verify_cookies(cookies["auth_token"], cookies["ct0"], cookies.get("cookie_string"))
+        if verification.get("viewer"):
+            cookies["viewer"] = verification["viewer"]
     except RuntimeError:
         # Auth failure — re-extract from browser and retry verification
         logger.info("Cookie verification failed, re-extracting from browser")
         fresh_cookies, _ = extract_from_browser()
         if fresh_cookies:
             # Verify fresh cookies — if this also fails, let it raise
-            verify_cookies(fresh_cookies["auth_token"], fresh_cookies["ct0"], fresh_cookies.get("cookie_string"))
+            verification = verify_cookies(fresh_cookies["auth_token"], fresh_cookies["ct0"], fresh_cookies.get("cookie_string"))
+            if verification.get("viewer"):
+                fresh_cookies["viewer"] = verification["viewer"]
             return fresh_cookies
         raise
     return cookies
